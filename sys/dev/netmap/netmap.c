@@ -2057,7 +2057,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		NMG_LOCK();
 		do {
 			/* memsize is always valid */
-			struct netmap_mem_d *nmd = &nm_mem;
+			struct netmap_mem_d *nmd = netmap_mem_get_allocator(0);
 			u_int memflags;
 
 			if (nmr->nr_name[0] != '\0') {
@@ -2605,7 +2605,7 @@ netmap_attach_common(struct netmap_adapter *na)
 
 	if (na->nm_mem == NULL)
 		/* use the global allocator */
-		na->nm_mem = &nm_mem;
+		na->nm_mem = netmap_mem_get_allocator(0);
 #ifdef WITH_VALE
 	if (na->nm_bdg_attach == NULL)
 		/* no special nm_bdg_attach callback. On VALE

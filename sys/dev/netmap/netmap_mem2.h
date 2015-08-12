@@ -113,10 +113,9 @@
  * reconfiguration. The private allocators release all their memory when there
  * are no active users.  By 'active user' we mean an existing netmap_priv
  * structure holding a reference to the allocator.
- */
+ */ 
 
-extern struct netmap_mem_d nm_mem;
-
+struct netmap_mem_d * netmap_mem_get_allocator(int nm_id);
 struct lut_entry* netmap_mem_get_lut(struct netmap_mem_d *);
 u_int      netmap_mem_get_buftotal(struct netmap_mem_d *);
 size_t     netmap_mem_get_bufsize(struct netmap_mem_d *);

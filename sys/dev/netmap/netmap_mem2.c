@@ -1049,6 +1049,11 @@ error:
 	return nmd->lasterr;
 }
 
+struct netmap_mem_d *
+netmap_mem_get_allocator(int nm_id){
+        return &nm_mem;
+}
+
 
 
 void
