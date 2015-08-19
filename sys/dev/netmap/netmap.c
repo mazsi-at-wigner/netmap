@@ -1314,7 +1314,7 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
  */
 
 int
-netmap_get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
+netmap_get_hw_na(struct nmreq *nmr, struct ifnet *ifp, struct netmap_adapter **na)
 {
 	/* generic support */
 	int i = netmap_admode;	/* Take a snapshot. */
@@ -1463,7 +1463,7 @@ netmap_get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 	        return ENXIO;
 	}
 
-	error = netmap_get_hw_na(ifp, &ret);
+	error = netmap_get_hw_na(nmr, ifp, &ret);
 	if (error)
 		goto out;
 
