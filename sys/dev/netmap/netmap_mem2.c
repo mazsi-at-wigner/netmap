@@ -200,24 +200,24 @@ struct netmap_obj_params netmap_min_priv_params[NETMAP_POOLS_NR] = {
 static int netmap_mem_global_config(struct netmap_mem_d *nmd);
 static int netmap_mem_global_finalize(struct netmap_mem_d *nmd);
 static void netmap_mem_global_deref(struct netmap_mem_d *nmd);
-struct netmap_mem_d nm_mem = {	/* Our memory allocator. */
+struct netmap_mem_d nm_mem_blueprint = {	/* Our memory allocator. */
 	.pools = {
 		[NETMAP_IF_POOL] = {
-			.name 	= "netmap_if",
+			.name 	= "netmap_%d_if",
 			.objminsize = sizeof(struct netmap_if),
 			.objmaxsize = 4096,
 			.nummin     = 10,	/* don't be stingy */
 			.nummax	    = 10000,	/* XXX very large */
 		},
 		[NETMAP_RING_POOL] = {
-			.name 	= "netmap_ring",
+			.name 	= "netmap_%d_ring",
 			.objminsize = sizeof(struct netmap_ring),
 			.objmaxsize = 32*PAGE_SIZE,
 			.nummin     = 2,
 			.nummax	    = 1024,
 		},
 		[NETMAP_BUF_POOL] = {
-			.name	= "netmap_buf",
+			.name	= "netmap_%d_buf",
 			.objminsize = 64,
 			.objmaxsize = 65536,
 			.nummin     = 4,
@@ -228,15 +228,19 @@ struct netmap_mem_d nm_mem = {	/* Our memory allocator. */
 	.finalize = netmap_mem_global_finalize,
 	.deref    = netmap_mem_global_deref,
 
-	.nm_id = 1,
+	.nm_id = -1,
 	.nm_grp = -1,
 
-	.prev = &nm_mem,
-	.next = &nm_mem,
+	.prev = NULL,
+	.next = NULL,
 };
 
+/* number of global memory pools, should be dynamic */
+#define NGPOOLS 2
 
-struct netmap_mem_d *netmap_last_mem_d = &nm_mem;
+struct netmap_mem_d nm_mems[NGPOOLS];  /* Our global memory allocator. */
+
+struct netmap_mem_d *netmap_last_mem_d = &nm_mems[NGPOOLS - 1];
 
 /* blueprint for the private memory allocators */
 static int netmap_mem_private_config(struct netmap_mem_d *nmd);
@@ -277,16 +281,16 @@ const struct netmap_mem_d nm_blueprint = {
 
 #define STRINGIFY(x) #x
 
-
+/* TODO: not much sense for nm_mem_blueprint */
 #define DECLARE_SYSCTLS(id, name) \
 	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_size, \
 	    CTLFLAG_RW, &netmap_params[id].size, 0, "Requested size of netmap " STRINGIFY(name) "s"); \
 	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_curr_size, \
-	    CTLFLAG_RD, &nm_mem.pools[id]._objsize, 0, "Current size of netmap " STRINGIFY(name) "s"); \
+	    CTLFLAG_RD, &nm_mem_blueprint.pools[id]._objsize, 0, "Current size of netmap " STRINGIFY(name) "s"); \
 	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_num, \
 	    CTLFLAG_RW, &netmap_params[id].num, 0, "Requested number of netmap " STRINGIFY(name) "s"); \
 	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_curr_num, \
-	    CTLFLAG_RD, &nm_mem.pools[id].objtotal, 0, "Current number of netmap " STRINGIFY(name) "s"); \
+	    CTLFLAG_RD, &nm_mem_blueprint.pools[id].objtotal, 0, "Current number of netmap " STRINGIFY(name) "s"); \
 	SYSCTL_INT(_dev_netmap, OID_AUTO, priv_##name##_size, \
 	    CTLFLAG_RW, &netmap_min_priv_params[id].size, 0, \
 	    "Default size of private netmap " STRINGIFY(name) "s"); \
@@ -299,6 +303,7 @@ DECLARE_SYSCTLS(NETMAP_IF_POOL, if);
 DECLARE_SYSCTLS(NETMAP_RING_POOL, ring);
 DECLARE_SYSCTLS(NETMAP_BUF_POOL, buf);
 
+/* call with NMA_LOCK(&nm_mems[0]) held */
 static int
 nm_mem_assign_id(struct netmap_mem_d *nmd)
 {
@@ -306,13 +311,13 @@ nm_mem_assign_id(struct netmap_mem_d *nmd)
 	struct netmap_mem_d *scan = netmap_last_mem_d;
 	int error = ENOMEM;
 
-	NMA_LOCK(&nm_mem);
+	NMA_LOCK(&nm_mems[0]);
 
 	do {
 		/* we rely on unsigned wrap around */
 		id = scan->nm_id + 1;
 		if (id == 0) /* reserve 0 as error value */
-			id = 1;
+			id = NGPOOLS;
 		scan = scan->next;
 		if (id != scan->nm_id) {
 			nmd->nm_id = id;
@@ -326,14 +331,14 @@ nm_mem_assign_id(struct netmap_mem_d *nmd)
 		}
 	} while (scan != netmap_last_mem_d);
 
-	NMA_UNLOCK(&nm_mem);
+	NMA_UNLOCK(&nm_mems[0]);
 	return error;
 }
 
 static void
 nm_mem_release_id(struct netmap_mem_d *nmd)
 {
-	NMA_LOCK(&nm_mem);
+	NMA_LOCK(&nm_mems[0]);
 
 	nmd->prev->next = nmd->next;
 	nmd->next->prev = nmd->prev;
@@ -343,7 +348,7 @@ nm_mem_release_id(struct netmap_mem_d *nmd)
 
 	nmd->prev = nmd->next = NULL;
 
-	NMA_UNLOCK(&nm_mem);
+	NMA_UNLOCK(&nm_mems[0]);
 }
 
 static int
@@ -1049,9 +1054,10 @@ error:
 	return nmd->lasterr;
 }
 
+/* always return something sensible, even if nm_id is out of range */
 struct netmap_mem_d *
 netmap_mem_get_allocator(int nm_id){
-        return &nm_mem;
+        return &nm_mems[nm_id % NGPOOLS];
 }
 
 
@@ -1264,25 +1270,42 @@ out:
 	NMA_UNLOCK(nmd);
 
 	return err;
-
 }
 
 int
 netmap_mem_init(void)
 {
-	NMA_LOCK_INIT(&nm_mem);
+	unsigned int i, j;
+
+	for(i = 0; i < NGPOOLS; i++){
+		struct netmap_mem_d *nmd = &nm_mems[i];
+		*nmd = nm_mem_blueprint;
+		NMA_LOCK_INIT(nmd);
+		nmd->nm_id = i + 1;
+		nmd->prev = nm_mems + ((i - 1) % NGPOOLS);
+		nmd->next = nm_mems + ((i + 1) % NGPOOLS);
+		for (j = 0; j < NETMAP_POOLS_NR; j++){
+			struct netmap_obj_pool *ref = &nm_mem_blueprint.pools[j];
+			struct netmap_obj_pool *p = &nmd->pools[j];
+			snprintf(p->name, NETMAP_POOL_MAX_NAMSZ, ref->name, nmd->nm_id);
+		}
+	}
+
 	return (0);
 }
 
 void
 netmap_mem_fini(void)
 {
-	int i;
+	unsigned int i, j;
 
-	for (i = 0; i < NETMAP_POOLS_NR; i++) {
-	    netmap_destroy_obj_allocator(&nm_mem.pools[i]);
+	for (i = 0; i < NGPOOLS; i++) {
+		struct netmap_mem_d *nmd = &nm_mems[i];
+		for (j = 0; j < NETMAP_POOLS_NR; j++) {
+			netmap_destroy_obj_allocator(&nmd->pools[j]);
+		}
+		NMA_LOCK_DESTROY(nmd);
 	}
-	NMA_LOCK_DESTROY(&nm_mem);
 }
 
 static void
