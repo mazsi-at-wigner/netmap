@@ -131,6 +131,7 @@ struct netmap_mem_d {
 
 	nm_memid_t nm_id;	/* allocator identifier */
 	int nm_grp;	/* iommu groupd id */
+	int nm_numa; /* numa node obj_pool is bound to */
 
 	/* list of all existing allocators, sorted by nm_id */
 	struct netmap_mem_d *prev, *next;
@@ -230,6 +231,7 @@ struct netmap_mem_d nm_mem_blueprint = {	/* Our memory allocator. */
 
 	.nm_id = -1,
 	.nm_grp = -1,
+	.nm_numa = -1,
 
 	.prev = NULL,
 	.next = NULL,
@@ -275,6 +277,8 @@ const struct netmap_mem_d nm_blueprint = {
 	.deref    = netmap_mem_private_deref,
 
 	.flags = NETMAP_MEM_PRIVATE,
+
+	.nm_grp = -1,
 };
 
 /* memory allocator related sysctls */
@@ -866,7 +870,7 @@ netmap_config_obj_allocator(struct netmap_obj_pool *p, u_int objtotal, u_int obj
 
 /* call with NMA_LOCK held */
 static int
-netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
+netmap_finalize_obj_allocator(struct netmap_obj_pool *p, int numanode)
 {
 	int i; /* must be signed */
 	size_t n;
@@ -1028,7 +1032,7 @@ netmap_mem_finalize_all(struct netmap_mem_d *nmd)
 	nmd->lasterr = 0;
 	nmd->nm_totalsize = 0;
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
-		nmd->lasterr = netmap_finalize_obj_allocator(&nmd->pools[i]);
+		nmd->lasterr = netmap_finalize_obj_allocator(&nmd->pools[i], nmd->nm_numa);
 		if (nmd->lasterr)
 			goto error;
 		nmd->nm_totalsize += nmd->pools[i].memtotal;
@@ -1282,6 +1286,7 @@ netmap_mem_init(void)
 		*nmd = nm_mem_blueprint;
 		NMA_LOCK_INIT(nmd);
 		nmd->nm_id = i + 1;
+		nmd->nm_numa = i;
 		nmd->prev = nm_mems + ((i - 1) % NGPOOLS);
 		nmd->next = nm_mems + ((i + 1) % NGPOOLS);
 		for (j = 0; j < NETMAP_POOLS_NR; j++){
